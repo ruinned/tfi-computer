@@ -41,21 +41,20 @@
  *  Fixed pin mapping:
  *  Test trigger out - A0 (Uses TIM5)
  *  Event timer TIM2 slaved off TIM8
- *  Trigger 0 - PB3 (TIM2_CH2)
- *  Trigger 1 - PB10 (TIM2_CH3)
- *  Trigger 2 - PB11 (TIM2_CH4)
+ *  Trigger 0 - A0 (TIM2_CH1)
+ *  Trigger 1 - A1 (TIM2_CH2) (B3 optional)
+ *  Trigger 2 - A2 (TIM2_CH3) (B10 optional)
+ *  Trigger 3 - A3 (TIM2_CH4)
+ *  (All trigger inputs usable as frequency inputs)
+ *
+ *  GPIO: B8-B15
+ *  OUT: C0-C15
  *
  *  CAN2:
  *    PB5, PB6
  *
  *  USB:
  *    PA9, PA11, PA12
- *
- *  Freq:
- *    TIM10 PB8
- *    TIM11 PB9
- *    TIM13 PA6
- *    TIM14 PA7
  *
  *  TLC2543 on SPI2 (PB12-15) CS, SCK, MISO, MOSI
  *    - Uses TIM7 dma1 stream 2 chan 1 to trigger DMA at about 50 khz for 10
@@ -66,8 +65,6 @@
  *  Configurable pin mapping:
  *  Scheduled Outputs:
  *   - 0-15 maps to port D, pins 0-15
- *  Freq sensor:
- *   - 1-4 maps to port A, pin 8-11 (TIM1 CH1-4)
  *  PWM Outputs
  *   - 0-PC6  1-PC7 2-PC8 3-PC9 TIM3 channel 1-4
  *  GPIO (Digital Sensor or Output)
@@ -194,9 +191,52 @@ static int capture_edge_from_config(trigger_edge e) {
   return RISING_EDGE;
 }
 
+static volatile uint32_t trigger_capture_times[4][128];
+
+static void platform_init_freq_input(int interrupt_enabled, uint8_t pin) {
+
+  tim_ic_id ic_id;
+  uint16_t gpio_pin;
+  uint16_t ic_ie;
+  switch (pin) {
+    case 0:
+      ic_id = TIM_IC1;
+      ic_ie = TIM_DIER_CC1IE;
+      gpio_pin = GPIO0;
+      break;
+    case 1:
+      ic_id = TIM_IC2;
+      ic_ie = TIM_DIER_CC2IE;
+      gpio_pin = GPIO1;
+      break;
+    case 2:
+      ic_id = TIM_IC3;
+      ic_ie = TIM_DIER_CC3IE;
+      gpio_pin = GPIO2;
+      break;
+    case 3:
+      ic_id = TIM_IC4;
+      ic_ie = TIM_DIER_CC4IE;
+      gpio_pin = GPIO3;
+      break;
+    default:
+      return;
+  }
+
+  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_PULLDOWN, gpio_pin);
+  gpio_set_af(GPIOA, GPIO_AF1, gpio_pin);
+  timer_ic_set_input(TIM2, ic_id, TIM_IC_IN_TI2);
+  timer_ic_set_filter(TIM2, ic_id, TIM_IC_CK_INT_N_2);
+  timer_ic_set_polarity(TIM2, id_id, TIM_IC_RISING);
+  timer_ic_enable(TIM2, id_id);
+  
+  if (interrupt_enabled) {
+    timer_enable_irq(TIM2, ic_ie);
+  }
+}
+
 static void platform_init_eventtimer() {
   /* Set up TIM2 as 32bit clock that is slaved off TIM8*/
-
 
   timer_reset(TIM2);
   timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
@@ -215,7 +255,14 @@ static void platform_init_eventtimer() {
   timer_disable_oc_preload(TIM2, TIM_OC1);
   timer_set_oc_slow_mode(TIM2, TIM_OC1);
   timer_set_oc_mode(TIM2, TIM_OC1, TIM_OCM_FROZEN);
-  /* Setup input captures for CH2-4 Triggers */
+  /* Setup input captures for CH1-4 Triggers */
+  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_PULLDOWN, GPIO15);
+  gpio_set_af(GPIOA, GPIO_AF1, GPIO15);
+  timer_ic_set_input(TIM2, TIM_IC1, TIM_IC_IN_TI2);
+  timer_ic_set_filter(TIM2, TIM_IC1, TIM_IC_CK_INT_N_2);
+  timer_ic_set_polarity(TIM2, TIM_IC1, TIM_IC_RISING);
+  timer_ic_enable(TIM2, TIM_IC1);
+
   gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_PULLDOWN, GPIO3);
   gpio_set_af(GPIOB, GPIO_AF1, GPIO3);
   timer_ic_set_input(TIM2, TIM_IC2, TIM_IC_IN_TI2);
@@ -238,9 +285,10 @@ static void platform_init_eventtimer() {
   timer_ic_enable(TIM2, TIM_IC4);
 
   timer_enable_counter(TIM2);
+
+  /* Only enable interrupt for t0/t1 -- eventually make configurable */
   timer_enable_irq(TIM2, TIM_DIER_CC2IE);
   timer_enable_irq(TIM2, TIM_DIER_CC3IE);
-  timer_enable_irq(TIM2, TIM_DIER_CC4IE);
   nvic_enable_irq(NVIC_TIM2_IRQ);
   nvic_set_priority(NVIC_TIM2_IRQ, 32);
 
